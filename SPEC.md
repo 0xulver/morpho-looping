@@ -1,0 +1,5 @@
+We want you to set up a simple leverage loop strategy on chain.
+The goal is simple, you will be tracking these two markets (https://app.morpho.org/ethereum/market/0x8d177cc2597296e8ff4816be51fe2482add89de82bdfaba3118c7948a6b2bc02/pt-susde-29may2025-usdc?tab=market and https://app.morpho.org/ethereum/market/0xa59b6c3c6d1df322195bfb48ddcdcca1a4c0890540e8ee75815765096c1e8971/usd0usd0-usdc).
+For each market, we want you to calculate what the most profitable loop would be in terms of leverage while being mindful of the available liquidity, the new state of the market after the loop, the slippage, also making sure we keep a health factor 3% above liquidation at max.
+The loop needs to be set up with a flashloan (atomic). Execute can be manual (manually triggered, it will calculate the best loop per market, choose which one is the best out of both and execute that single one).
+If you feel you can improve on this design and add other functionalities or improvements feel free to do so.
