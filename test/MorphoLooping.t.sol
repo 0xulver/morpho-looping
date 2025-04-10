@@ -2,31 +2,15 @@
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
+import "../src/MorphoLooping.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
-interface IMorpho {
-    struct MarketParams {
-        address loanToken;
-        address collateralToken;
-        address oracle;
-        address irm;
-        uint256 lltv;
-    }
-
-    struct Market {
-        uint128 totalSupplyAssets;
-        uint128 totalSupplyShares;
-        uint128 totalBorrowAssets;
-        uint128 totalBorrowShares;
-        uint128 lastUpdate;
-        uint128 fee;
-    }
-
-    function market(bytes32 id) external view returns (Market memory);
-    function idToMarketParams(bytes32 id) external view returns (MarketParams memory);
-}
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {SwapHelper} from "./helpers/SwapHelper.sol";
 
 contract MorphoLoopingTest is Test {
+    using SafeERC20 for IERC20;
+    
     // Market struct to store market parameters
     struct MarketInfo {
         bytes32 id;  // Market ID from Morpho Blue
@@ -50,18 +34,38 @@ contract MorphoLoopingTest is Test {
     // Time and block constants
     uint256 constant ETHEREUM_BLOCKS_PER_DAY = 7151;
     uint256 constant TEST_PERIOD_DAYS = 7;
+    uint256 constant WAD = 1e18;
+    uint256 constant SAFETY_BUFFER = 0.03e18; // 3%
+    
+    // Add these constants near the other constants at the top of the contract
+    uint256 constant INITIAL_COLLATERAL_AMOUNT = 1000;  // Base units (e.g. 1000 USDC = 1000 * 10^6)
     
     IMorpho public morpho;
+    MorphoLooping public looping;
     MarketInfo[] public markets;
+    SwapHelper public swapHelper;
+
+    struct Position {
+        bytes32 marketId;
+        uint256 initialCollateral;
+        uint256 flashLoanAmount;
+        uint256 leverageAchieved;
+        uint256 entryTimestamp;
+    }
+    Position[] private positions;
 
     function setUp() public {
         // Create Mainnet fork
         vm.createSelectFork(vm.envString("ETH_RPC_URL"));
         
-        // Initialize Morpho interface
+        // Initialize SwapHelper
+        swapHelper = new SwapHelper();
+        
+        // Initialize contracts
         morpho = IMorpho(MORPHO);
+        looping = new MorphoLooping(MORPHO, address(swapHelper));
 
-        // First add the required markets from SPEC.md
+        // Initialize markets array
         markets.push(MarketInfo({
             id: MARKET_PT_SUSDE,
             name: "PT-sUSDe/USDC",
@@ -69,15 +73,19 @@ contract MorphoLoopingTest is Test {
             collateralToken: PT_SUSDE
         }));
 
-        markets.push(MarketInfo({
-            id: MARKET_USD0_USDC,
-            name: "USD0/USDC",
-            loanToken: USDC,
-            collateralToken: USD0
-        }));
+        // markets.push(MarketInfo({
+        //     id: MARKET_USD0_USDC,
+        //     name: "USD0/USDC",
+        //     loanToken: USDC,
+        //     collateralToken: USD0
+        // }));
+
+        // Initialize positions array with same length as markets
+        delete positions; // Clear any existing positions
+        positions = new Position[](markets.length);
     }
 
-    function testQueryMarketData() public {
+    function testQueryMarketData() public view {
         console.log("\n=== Querying Market Data ===");
         
         for (uint i = 0; i < markets.length; i++) {
@@ -99,16 +107,93 @@ contract MorphoLoopingTest is Test {
         }
     }
 
+    function getOraclePrice(address oracle) internal view returns (uint256) {
+        // For testing purposes, we'll return a mock price
+        // In production, this would call the actual oracle
+        return 1e18; // 1:1 price ratio for simplicity
+    }
+
+    function estimateSlippage(
+        address tokenIn,
+        address tokenOut,
+        uint256 amount
+    ) internal view returns (uint256) {
+        // For testing purposes, we'll return a fixed slippage estimate
+        // In production, this would query the DEX for actual slippage estimates
+        return 0.01e18; // 1% slippage
+    }
+
+    function generateSwapCalldata(
+        address tokenIn,
+        address tokenOut,
+        uint256 amount
+    ) internal pure returns (bytes memory) {
+        // For testing purposes, we'll return empty bytes
+        // In production, this would generate actual DEX swap calldata
+        return "";
+    }
+
+    function calculateOptimalParams(
+        MarketInfo memory market,
+        uint256 initialCollateral
+    ) internal view returns (
+        uint256 flashLoanAmount,
+        uint256 expectedCollateral,
+        uint256 leverageAchieved,
+        bytes memory swapData
+    ) {
+        IMorpho.MarketParams memory params = morpho.idToMarketParams(market.id);
+        IMorpho.Market memory marketData = morpho.market(market.id);
+        
+        // Get current market conditions
+        uint256 availableLiquidity = marketData.totalSupplyAssets - marketData.totalBorrowAssets;
+        uint256 currentPrice = getOraclePrice(params.oracle);
+        uint256 expectedSlippage = estimateSlippage(market.loanToken, market.collateralToken, initialCollateral);
+
+        // Calculate optimal flash loan amount with safety buffer
+        uint256 safeLltv = params.lltv - ((params.lltv * SAFETY_BUFFER) / WAD);
+        
+        // Prevent division by zero
+        if (WAD <= safeLltv) {
+            return (0, initialCollateral, WAD, ""); // Return 1x leverage if LLTV is too high
+        }
+        
+        flashLoanAmount = (initialCollateral * safeLltv) / (WAD - safeLltv);
+        
+        // Cap flash loan amount based on available liquidity
+        if (flashLoanAmount > availableLiquidity) {
+            flashLoanAmount = availableLiquidity;
+        }
+        
+        // Calculate expected collateral after swap
+        expectedCollateral = initialCollateral + ((flashLoanAmount * (WAD - expectedSlippage)) / WAD);
+        
+        // Calculate achieved leverage
+        leverageAchieved = (expectedCollateral * WAD) / initialCollateral;
+        
+        // Generate swap data (empty in test environment)
+        swapData = generateSwapCalldata(
+            market.loanToken,
+            market.collateralToken,
+            flashLoanAmount
+        );
+        
+        return (flashLoanAmount, expectedCollateral, leverageAchieved, swapData);
+    }
+
     function testHistoricalLoopingPerformance() public {
         // Get current block
         uint256 currentBlock = block.number;
+        uint256 pastBlock = currentBlock - (ETHEREUM_BLOCKS_PER_DAY * TEST_PERIOD_DAYS);
         
-        // Calculate past block (7 days ago)
-        uint256 blockDelta = ETHEREUM_BLOCKS_PER_DAY * TEST_PERIOD_DAYS;
-        uint256 pastBlock = currentBlock - blockDelta;
-        
-        // Fork from past block
+        // Fork from past block FIRST
         vm.createSelectFork(vm.envString("ETH_RPC_URL"), pastBlock);
+        
+        // AFTER forking, initialize all contracts and dependencies
+        swapHelper = new SwapHelper();
+        morpho = IMorpho(MORPHO);
+        looping = new MorphoLooping(MORPHO, address(swapHelper));
+        require(address(looping) != address(0), "Looping deployment failed");
         
         console.log("\n=== Historical Performance Test ===");
         console.log("Current Block:", currentBlock);
@@ -119,56 +204,73 @@ contract MorphoLoopingTest is Test {
         for (uint i = 0; i < markets.length; i++) {
             MarketInfo memory marketInfo = markets[i];
             
-            // Record initial state
-            uint256 initialCollateralBalance = IERC20(marketInfo.collateralToken).balanceOf(address(this));
-            uint256 initialLoanBalance = IERC20(marketInfo.loanToken).balanceOf(address(this));
+            // Get token decimals using IERC20Metadata
+            uint256 decimals = IERC20Metadata(marketInfo.collateralToken).decimals();
+            uint256 initialCollateral = INITIAL_COLLATERAL_AMOUNT * (10 ** decimals);
             
-            // Perform looping strategy
-            _executeLoopingStrategy(marketInfo);
+            // Mint initial collateral for testing
+            deal(marketInfo.collateralToken, address(this), initialCollateral);
             
-            // Store position details
-            positions[i] = Position({
-                marketId: marketInfo.id,
-                initialCollateral: initialCollateralBalance,
-                initialLoan: initialLoanBalance
-                // ... other position details
-            });
-        }
-        
-        // Roll forward to present by forking at current block
-        vm.createSelectFork(vm.envString("ETH_RPC_URL"));
-        
-        // Measure results
-        for (uint i = 0; i < markets.length; i++) {
-            MarketInfo memory marketInfo = markets[i];
-            Position memory position = positions[i];
+            // Approve looping contract to pull collateral
+            IERC20(marketInfo.collateralToken).safeIncreaseAllowance(address(looping), initialCollateral);
             
-            // Calculate final values
-            uint256 finalCollateralBalance = IERC20(marketInfo.collateralToken).balanceOf(address(this));
-            uint256 finalLoanBalance = IERC20(marketInfo.loanToken).balanceOf(address(this));
-            
-            // Calculate profit/loss in USD terms
-            (uint256 profitUsd, bool isProfit) = _calculateProfitLoss(
-                marketInfo,
-                position,
-                finalCollateralBalance,
-                finalLoanBalance
-            );
-            
-            console.log("\nMarket Performance:", marketInfo.name);
-            console.log("Profit/Loss (USD):", isProfit ? "+" : "-", profitUsd);
-            console.log("APR:", _calculateAPR(profitUsd, position.initialLoan));
-        }
-    }
+            // Calculate optimal parameters for leverage
+            (
+                uint256 flashLoanAmount,
+                ,  // expectedCollateral
+                uint256 leverageAchieved,
+                bytes memory swapData
+            ) = calculateOptimalParams(marketInfo, initialCollateral);
 
-    struct Position {
-        bytes32 marketId;
-        uint256 initialCollateral;
-        uint256 initialLoan;
-        uint256 leverageUsed;
-        uint256 entryTimestamp;
+            // Execute leverage strategy
+            IMorpho.MarketParams memory marketParams = morpho.idToMarketParams(marketInfo.id);
+            looping.executeStrategy(
+                initialCollateral,
+                MorphoLooping.FlashLoanParams({
+                    loanToken: marketInfo.loanToken,
+                    collateralToken: marketInfo.collateralToken,
+                    flashLoanAmount: flashLoanAmount,
+                    initialCollateral: initialCollateral,
+                    swapData: swapData,
+                    marketParams: marketParams
+                })
+            );
+
+            // // Store position details
+            // positions[i] = Position({
+            //     marketId: marketInfo.id,
+            //     initialCollateral: initialCollateral,
+            //     flashLoanAmount: flashLoanAmount,
+            //     leverageAchieved: leverageAchieved,
+            //     entryTimestamp: block.timestamp
+            // });
+        }
+        
+        // Roll forward to present and measure results
+        // vm.createSelectFork(vm.envString("ETH_RPC_URL"));
+        
+        // for (uint i = 0; i < markets.length; i++) {
+        //     MarketInfo memory marketInfo = markets[i];
+        //     Position memory position = positions[i];
+            
+        //     // Calculate final values
+        //     uint256 finalCollateralBalance = IERC20(marketInfo.collateralToken).balanceOf(address(this));
+        //     uint256 finalLoanBalance = IERC20(marketInfo.loanToken).balanceOf(address(this));
+            
+        //     // Calculate profit/loss in USD terms
+        //     (uint256 profitUsd, bool isProfit) = _calculateProfitLoss(
+        //         marketInfo,
+        //         position,
+        //         finalCollateralBalance,
+        //         finalLoanBalance
+        //     );
+            
+        //     console.log("\nMarket Performance:", marketInfo.name);
+        //     console.log("Leverage Used:", position.leverageAchieved);
+        //     console.log("Profit/Loss (USD):", isProfit ? "+" : "-", profitUsd);
+        //     console.log("APR:", _calculateAPR(profitUsd, position.initialCollateral));
+        // }
     }
-    Position[] private positions;
 
     function _executeLoopingStrategy(MarketInfo memory market) internal {
         // Implement looping logic here
@@ -190,5 +292,20 @@ contract MorphoLoopingTest is Test {
         // - Change in collateral value
         // - Outstanding loan value
         // - Accrued interest
+    }
+
+    function _calculateAPR(uint256 profitUsd, uint256 initialLoan) internal pure returns (uint256) {
+        // Convert the test period (7 days) to an annual rate
+        uint256 daysInYear = 365;
+        uint256 annualizationFactor = daysInYear * 1e18 / TEST_PERIOD_DAYS;
+        
+        // Calculate APR: (profit / initial_loan) * annualization_factor
+        // Note: profitUsd and initialLoan should be in the same decimals
+        if (initialLoan == 0) return 0;
+        
+        // Add safety check for division
+        if (profitUsd == 0) return 0;
+        
+        return (profitUsd * annualizationFactor) / initialLoan;
     }
 }
