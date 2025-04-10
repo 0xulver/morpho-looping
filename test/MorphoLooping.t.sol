@@ -18,8 +18,8 @@ contract MorphoLoopingTest is Test {
 
     // Token addresses
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
-    address constant PT_SUSDE = 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497;  // PT-sUSDe-29MAY2025
-    address constant USD0 = 0x0000000000000000000000000000000000000000;  // USD0
+    address constant PT_SUSDE = 0xb7de5dFCb74d25c2f21841fbd6230355C50d9308;  // PT-sUSDe-29MAY2025
+    address constant USD0 = 0x1d08E7adC263CfC70b1BaBe6dC5Bb339c16Eec52;  // USD0
 
     // Sample markets
     MarketInfo[] public markets;
