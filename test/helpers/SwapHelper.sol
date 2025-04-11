@@ -32,7 +32,7 @@ contract SwapHelper is Test {
     bytes32 constant MARKET_PT_SUSDE = 0x8d177cc2597296e8ff4816be51fe2482add89de82bdfaba3118c7948a6b2bc02;
     
     // Router addresses
-    address constant UNIV4_ROUTER = 0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD;
+    address constant UNIV4_ROUTER = 0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af;
     address constant PENDLE_ROUTER = 0x888888888889758F76e7103c6CbF23ABbF58F946;
 
     IUniversalRouter public uniRouter;
@@ -71,8 +71,76 @@ contract SwapHelper is Test {
             expiration
         );
 
+//         ```solidity
+// bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
+// ```
+
+
+//         ```solidity
+        // // Encode V4Router actions
+        // bytes memory actions = abi.encodePacked(
+        //     uint8(Actions.SWAP_EXACT_IN_SINGLE),
+        //     uint8(Actions.SETTLE_ALL),
+        //     uint8(Actions.TAKE_ALL)
+        // );
+        // ```
+
+        // These actions define the sequence of operations that will be performed in our v4 swap:
+
+        // 1. `SWAP_EXACT_IN_SINGLE`: This action specifies that we want to perform an exact input swap using a single pool.
+        // 2. `SETTLE_ALL`: This action ensures all input tokens involved in the swap are properly paid. This is part of v4's settlement pattern for handling token transfers.
+        // 3. `TAKE_ALL`: This final action collects all output tokens after the swap is complete.
+
+        // The sequence of these actions is important as they define the complete flow of our swap operation from start to finish.
+
+        // ### 3.4: Preparing the Swap Inputs
+
+        // For our v4 swap, we need to prepare three parameters that correspond to our encoded actions:
+
+        // ```solidity
+        // bytes[] memory params = new bytes[](3);
+
+        // // First parameter: swap configuration
+        // params[0] = abi.encode(
+        //     IV4Router.ExactInputSingleParams({
+        //         poolKey: key,
+        //         zeroForOne: true,            // true if we're swapping token0 for token1
+        //         amountIn: amountIn,          // amount of tokens we're swapping
+        //         amountOutMinimum: minAmountOut, // minimum amount we expect to receive
+        //         hookData: bytes("")             // no hook data needed
+        //     })
+        // );
+
+        // // Second parameter: specify input tokens for the swap
+        // // encode SETTLE_ALL parameters
+        // params[1] = abi.encode(key.currency0, amountIn);
+
+        // // Third parameter: specify output tokens from the swap
+        // params[2] = abi.encode(key.currency1, minAmountOut);
+        // ```
+
+        // Each encoded parameter serves a specific purpose:
+
+        // 1. The first parameter configures how the swap should be executed, defining the pool, amounts, and other swap-specific details
+        // 2. The second parameter defines what tokens we're putting into the swap
+        // 3. The third parameter defines what tokens we expect to receive from the swap
+
+        // These parameters work in conjunction with the actions we encoded earlier (`SWAP_EXACT_IN_SINGLE`, `SETTLE_ALL`, and `TAKE_ALL`) to execute our swap operation.
+
+        // ### 3.5: Executing the Swap
+
+        // Now we can execute the swap using the Universal Router. It's crucial to allow users to specify their own deadline for transaction execution:
+
+        // ```solidity
+        // // Combine actions and params into inputs
+        // inputs[0] = abi.encode(actions, params);
+
+        // // Execute the swap with deadline protection
+        // router.execute(commands, inputs, deadline);
+
         // Step 1: USDC -> sUSDe (via Uniswap V4)
         bytes memory commands = abi.encodePacked(uint8(0x10));
+        
 
         // Encode V4Router actions
         bytes memory actionsBytes = abi.encodePacked(
@@ -81,12 +149,14 @@ contract SwapHelper is Test {
             uint8(Actions.TAKE_ALL)
         );
 
+        
+
         // Configure the pool key
         PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(USDC),
-            currency1: Currency.wrap(SUSDE),
+            currency0: Currency.wrap(SUSDE),
+            currency1: Currency.wrap(USDC),
             fee: 300,
-            tickSpacing: 60,
+            tickSpacing: 6,
             hooks: IHooks(address(0))
         });
 
@@ -104,14 +174,21 @@ contract SwapHelper is Test {
             })
         );
 
+        bytes[] memory params = new bytes[](3);
+        params[0] = paramsBytes;
+        params[1] = abi.encode(key.currency1, amountIn);
+        params[2] = abi.encode(key.currency0, 1);
+
         // Combine actions and parameters into inputs
         bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(actionsBytes, paramsBytes);
+        inputs[0] = abi.encode(actionsBytes, params);
 
         uint256 deadline = block.timestamp + 20;
 
+        console.log("block.timestamp:", block.timestamp);
+
         try uniRouter.execute(commands, inputs, deadline) {
-            amountOut = IERC20(SUSDE).balanceOf(recipient);
+            amountOut = IERC20(SUSDE).balanceOf(address(this));
             console.log("sUSDe balance after swap:", amountOut);
         } catch (bytes memory reason) {
             console.log("Swap failed with error:");
