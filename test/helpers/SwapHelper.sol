@@ -71,73 +71,6 @@ contract SwapHelper is Test {
             expiration
         );
 
-//         ```solidity
-// bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
-// ```
-
-
-//         ```solidity
-        // // Encode V4Router actions
-        // bytes memory actions = abi.encodePacked(
-        //     uint8(Actions.SWAP_EXACT_IN_SINGLE),
-        //     uint8(Actions.SETTLE_ALL),
-        //     uint8(Actions.TAKE_ALL)
-        // );
-        // ```
-
-        // These actions define the sequence of operations that will be performed in our v4 swap:
-
-        // 1. `SWAP_EXACT_IN_SINGLE`: This action specifies that we want to perform an exact input swap using a single pool.
-        // 2. `SETTLE_ALL`: This action ensures all input tokens involved in the swap are properly paid. This is part of v4's settlement pattern for handling token transfers.
-        // 3. `TAKE_ALL`: This final action collects all output tokens after the swap is complete.
-
-        // The sequence of these actions is important as they define the complete flow of our swap operation from start to finish.
-
-        // ### 3.4: Preparing the Swap Inputs
-
-        // For our v4 swap, we need to prepare three parameters that correspond to our encoded actions:
-
-        // ```solidity
-        // bytes[] memory params = new bytes[](3);
-
-        // // First parameter: swap configuration
-        // params[0] = abi.encode(
-        //     IV4Router.ExactInputSingleParams({
-        //         poolKey: key,
-        //         zeroForOne: true,            // true if we're swapping token0 for token1
-        //         amountIn: amountIn,          // amount of tokens we're swapping
-        //         amountOutMinimum: minAmountOut, // minimum amount we expect to receive
-        //         hookData: bytes("")             // no hook data needed
-        //     })
-        // );
-
-        // // Second parameter: specify input tokens for the swap
-        // // encode SETTLE_ALL parameters
-        // params[1] = abi.encode(key.currency0, amountIn);
-
-        // // Third parameter: specify output tokens from the swap
-        // params[2] = abi.encode(key.currency1, minAmountOut);
-        // ```
-
-        // Each encoded parameter serves a specific purpose:
-
-        // 1. The first parameter configures how the swap should be executed, defining the pool, amounts, and other swap-specific details
-        // 2. The second parameter defines what tokens we're putting into the swap
-        // 3. The third parameter defines what tokens we expect to receive from the swap
-
-        // These parameters work in conjunction with the actions we encoded earlier (`SWAP_EXACT_IN_SINGLE`, `SETTLE_ALL`, and `TAKE_ALL`) to execute our swap operation.
-
-        // ### 3.5: Executing the Swap
-
-        // Now we can execute the swap using the Universal Router. It's crucial to allow users to specify their own deadline for transaction execution:
-
-        // ```solidity
-        // // Combine actions and params into inputs
-        // inputs[0] = abi.encode(actions, params);
-
-        // // Execute the swap with deadline protection
-        // router.execute(commands, inputs, deadline);
-
         // Step 1: USDC -> sUSDe (via Uniswap V4)
         bytes memory commands = abi.encodePacked(uint8(0x10));
         
@@ -148,8 +81,6 @@ contract SwapHelper is Test {
             uint8(Actions.SETTLE_ALL),
             uint8(Actions.TAKE_ALL)
         );
-
-        
 
         // Configure the pool key
         PoolKey memory key = PoolKey({
@@ -199,36 +130,6 @@ contract SwapHelper is Test {
         return amountOut;
     }
 
-    function _generateUniV4Swap(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn
-    ) internal view returns (bytes memory) {
-        // Command for V4 swap
-        bytes memory commands = abi.encodePacked(uint8(Commands.V3_SWAP_EXACT_IN));
-
-        // Encode V4Router actions
-        bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_IN_SINGLE),
-            uint8(Actions.SETTLE_ALL),
-            uint8(Actions.TAKE_ALL)
-        );
-
-        // Encode the parameters for the swap
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(
-            actions,
-            tokenIn,
-            tokenOut,
-            3000, // fee
-            address(this), // recipient
-            amountIn,
-            0 // amountOutMinimum
-        );
-
-        return abi.encode(commands, inputs);
-    }
-
     function _generatePendleSwap(
         address tokenIn,
         uint256 amountIn
@@ -238,35 +139,5 @@ contract SwapHelper is Test {
             tokenIn,
             amountIn
         );
-    }
-
-    // Mock functions to simulate swaps for testing
-    function swap(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn
-    ) external returns (uint256 amountOut) {
-        // Mock exchange rate 1:1 for testing
-        amountOut = amountIn;
-        
-        // Simulate token transfer
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-        IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
-        
-        return amountOut;
-    }
-
-    function swapExactTokensForTokens(
-        address tokenIn,
-        uint256 amountIn
-    ) external returns (uint256 amountOut) {
-        // Mock exchange rate 1:1 for testing
-        amountOut = amountIn;
-        
-        // Simulate token transfer
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-        IERC20(PT_SUSDE).safeTransfer(msg.sender, amountOut);
-        
-        return amountOut;
     }
 }
