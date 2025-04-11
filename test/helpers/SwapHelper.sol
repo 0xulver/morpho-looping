@@ -2,17 +2,26 @@
 pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IUniversalRouter} from "@uniswap/universal-router/contracts/interfaces/IUniversalRouter.sol";
-import {Commands} from "@uniswap/universal-router/contracts/libraries/Commands.sol";
-import {Actions} from "@uniswap/v4-periphery/contracts/libraries/Actions.sol";
-import {IV4Router} from "@uniswap/v4-periphery/contracts/interfaces/IV4Router.sol";
-import {PoolKey} from "@uniswap/v4-core/contracts/types/PoolKey.sol";
+import {IUniversalRouter} from "universal-router/contracts/interfaces/IUniversalRouter.sol";
+import {Commands} from "universal-router/contracts/libraries/Commands.sol";
+import {IV4Router} from "v4-periphery/src/interfaces/IV4Router.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {IPendleRouter} from "../../src/interfaces/IPendleRouter.sol";
+import {Actions} from "v4-periphery/src/libraries/Actions.sol";
+import {Currency} from "v4-core/src/types/Currency.sol";
+import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {IPermit2} from "v4-periphery/lib/permit2/src/interfaces/IPermit2.sol";
 
 contract SwapHelper is Test {
     using SafeERC20 for IERC20;
+
+    // Constants for sqrt price limits
+    uint160 constant MIN_SQRT_RATIO = 4295128739;
+    uint160 constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
     // Token addresses
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
@@ -39,40 +48,77 @@ contract SwapHelper is Test {
         uint256 amountIn
     ) external returns (uint256 amountOut) {
         console.log("Swapping USDC to PT-sUSDe");
+        console.log("Amount in:", amountIn);
+
+        // Mint initial collateral for testing
+        deal(USDC, address(this), amountIn);
+
+        IPermit2 permit2 = IPermit2(0x000000000022D473030F116dDEE9F6B43aC78BA3);
+
+        // Approve USDC spending by Permit2
+        uint256 currentAllowance = IERC20(USDC).allowance(address(this), address(permit2));
+        if (currentAllowance < amountIn) {
+            IERC20(USDC).approve(address(permit2), type(uint256).max);
+        }
+
+        // Use Permit2 to grant allowance to Universal Router
+        uint160 allowanceAmount = uint160(amountIn);
+        uint48 expiration = uint48(block.timestamp + 3600);
+        IPermit2(permit2).approve(
+            USDC,
+            address(uniRouter),
+            allowanceAmount,
+            expiration
+        );
 
         // Step 1: USDC -> sUSDe (via Uniswap V4)
-        bytes memory uniswapData = _generateUniV4Swap(
-            USDC,
-            SUSDE,
-            amountIn
+        bytes memory commands = abi.encodePacked(uint8(0x10));
+
+        // Encode V4Router actions
+        bytes memory actionsBytes = abi.encodePacked(
+            uint8(Actions.SWAP_EXACT_IN_SINGLE),
+            uint8(Actions.SETTLE_ALL),
+            uint8(Actions.TAKE_ALL)
         );
-        
-        // Execute Uniswap swap
-        IERC20(USDC).safeIncreaseAllowance(UNIV4_ROUTER, amountIn);
-        (bool success1, ) = UNIV4_ROUTER.call(uniswapData);
-        require(success1, "UNISWAP_SWAP_FAILED");
-        
-        // Get sUSDe balance after swap
-        uint256 sUsdeAmount = IERC20(SUSDE).balanceOf(address(this));
-        console.log("sUSDe amount after Uniswap V4 swap:", sUsdeAmount);
-        
-        // Step 2: sUSDe -> PT-sUSDe (via Pendle)
-        // bytes memory pendleData = _generatePendleSwap(
-        //     SUSDE,
-        //     sUsdeAmount
-        // );
-        
-        // // Execute Pendle swap
-        // IERC20(SUSDE).safeIncreaseAllowance(PENDLE_ROUTER, sUsdeAmount);
-        // (bool success2, ) = PENDLE_ROUTER.call(pendleData);
-        // require(success2, "PENDLE_SWAP_FAILED");
-        
-        // // Get final PT-sUSDe amount
-        // amountOut = IERC20(PT_SUSDE).balanceOf(address(this));
-        
-        // // Transfer result to recipient
-        // IERC20(PT_SUSDE).safeTransfer(recipient, amountOut);
-        
+
+        // Configure the pool key
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(USDC),
+            currency1: Currency.wrap(SUSDE),
+            fee: 300,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        // Check token ordering and set zeroForOne accordingly
+        bool zeroForOne = uint256(uint160(USDC)) < uint256(uint160(SUSDE));
+
+        // Encode parameters for SWAP_EXACT_IN_SINGLE
+        bytes memory paramsBytes = abi.encode(
+            IV4Router.ExactInputSingleParams({
+                poolKey: key,
+                zeroForOne: zeroForOne,
+                amountIn: uint128(amountIn),
+                amountOutMinimum: 1,
+                hookData: bytes("")
+            })
+        );
+
+        // Combine actions and parameters into inputs
+        bytes[] memory inputs = new bytes[](1);
+        inputs[0] = abi.encode(actionsBytes, paramsBytes);
+
+        uint256 deadline = block.timestamp + 20;
+
+        try uniRouter.execute(commands, inputs, deadline) {
+            amountOut = IERC20(SUSDE).balanceOf(recipient);
+            console.log("sUSDe balance after swap:", amountOut);
+        } catch (bytes memory reason) {
+            console.log("Swap failed with error:");
+            console.logBytes(reason);
+            revert("Swap failed");
+        }
+
         return amountOut;
     }
 
@@ -81,17 +127,8 @@ contract SwapHelper is Test {
         address tokenOut,
         uint256 amountIn
     ) internal view returns (bytes memory) {
-        // Create pool key for the token pair
-        PoolKey memory key = PoolKey({
-            currency0: tokenIn < tokenOut ? tokenIn : tokenOut,
-            currency1: tokenIn < tokenOut ? tokenOut : tokenIn,
-            fee: 3000, // 0.3% fee tier
-            tickSpacing: 60,
-            hooks: address(0) // No hooks
-        });
-
-        // Determine if we're swapping from token0 to token1
-        bool zeroForOne = tokenIn == key.currency0;
+        // Command for V4 swap
+        bytes memory commands = abi.encodePacked(uint8(Commands.V3_SWAP_EXACT_IN));
 
         // Encode V4Router actions
         bytes memory actions = abi.encodePacked(
@@ -100,34 +137,19 @@ contract SwapHelper is Test {
             uint8(Actions.TAKE_ALL)
         );
 
-        // Prepare parameters for each action
-        bytes[] memory params = new bytes[](3);
-        params[0] = abi.encode(
-            IV4Router.ExactInputSingleParams({
-                poolKey: key,
-                zeroForOne: zeroForOne,
-                amountIn: uint128(amountIn),
-                amountOutMinimum: 0, // TODO: Add slippage protection
-                hookData: bytes("")
-            })
-        );
-        params[1] = abi.encode(tokenIn, amountIn);
-        params[2] = abi.encode(tokenOut, 0); // Minimum output amount
-
-        // Combine actions and params into inputs
+        // Encode the parameters for the swap
         bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(actions, params);
-
-        // Encode the Universal Router command
-        bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
-
-        // Return the final encoded call data
-        return abi.encodeWithSelector(
-            IUniversalRouter.execute.selector,
-            commands,
-            inputs,
-            block.timestamp + 20 // deadline: 20 seconds from now
+        inputs[0] = abi.encode(
+            actions,
+            tokenIn,
+            tokenOut,
+            3000, // fee
+            address(this), // recipient
+            amountIn,
+            0 // amountOutMinimum
         );
+
+        return abi.encode(commands, inputs);
     }
 
     function _generatePendleSwap(

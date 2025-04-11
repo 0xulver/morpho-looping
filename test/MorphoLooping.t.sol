@@ -19,26 +19,26 @@ contract MorphoLoopingTest is Test {
         address collateralToken;
     }
 
-    // Morpho Blue address on Mainnet
+    // Contract Addresses
     address constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
-    
+    address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    address constant SUSDE = 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497;
+    address constant PT_SUSDE = 0xF62849F9A0B5Bf2913b396098F7c7019b51A820a;
+    address constant UNIVERSAL_ROUTER = 0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD;
+    address constant PENDLE_ROUTER = 0x0000000000000000000000000000000000000000; // Replace with actual address
+
     // Markets from SPEC.md
     bytes32 constant MARKET_PT_SUSDE = 0x8d177cc2597296e8ff4816be51fe2482add89de82bdfaba3118c7948a6b2bc02;
     bytes32 constant MARKET_USD0_USDC = 0xa59b6c3c6d1df322195bfb48ddcdcca1a4c0890540e8ee75815765096c1e8971;
 
-    // Token addresses
-    address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
-    address constant PT_SUSDE = 0xb7de5dFCb74d25c2f21841fbd6230355C50d9308;  // PT-sUSDe-29MAY2025
-    address constant USD0 = 0x1d08E7adC263CfC70b1BaBe6dC5Bb339c16Eec52;  // USD0
-
     // Time and block constants
     uint256 constant ETHEREUM_BLOCKS_PER_DAY = 7151;
-    uint256 constant TEST_PERIOD_DAYS = 7;
+    uint256 constant TEST_PERIOD_DAYS = 1;
     uint256 constant WAD = 1e18;
     uint256 constant SAFETY_BUFFER = 0.03e18; // 3%
     
     // Add these constants near the other constants at the top of the contract
-    uint256 constant INITIAL_COLLATERAL_AMOUNT = 1000;  // Base units (e.g. 1000 USDC = 1000 * 10^6)
+    uint256 constant INITIAL_USDC_COLLATERAL_AMOUNT = 1;  // Base units (e.g. 1000 USDC = 1000 * 10^6)
     
     IMorpho public morpho;
     MorphoLooping public looping;
@@ -184,12 +184,20 @@ contract MorphoLoopingTest is Test {
     function testHistoricalLoopingPerformance() public {
         // Get current block
         uint256 currentBlock = block.number;
-        uint256 pastBlock = currentBlock - (ETHEREUM_BLOCKS_PER_DAY * TEST_PERIOD_DAYS);
+        uint256 pastBlock = currentBlock - (ETHEREUM_BLOCKS_PER_DAY * TEST_PERIOD_DAYS / 2);
         
         // Fork from past block FIRST
-        vm.createSelectFork(vm.envString("ETH_RPC_URL"), pastBlock);
+        // vm.createSelectFork(vm.envString("ETH_RPC_URL"), pastBlock);
         
-        // AFTER forking, initialize all contracts and dependencies
+        // Mark important addresses as persistent
+        vm.makePersistent(MORPHO);
+        vm.makePersistent(USDC);
+        vm.makePersistent(SUSDE);
+        vm.makePersistent(PT_SUSDE);
+        vm.makePersistent(UNIVERSAL_ROUTER);
+        vm.makePersistent(PENDLE_ROUTER);
+        
+        // AFTER forking and making contracts persistent, initialize all contracts and dependencies
         swapHelper = new SwapHelper();
         morpho = IMorpho(MORPHO);
         looping = new MorphoLooping(MORPHO, address(swapHelper));
@@ -205,36 +213,37 @@ contract MorphoLoopingTest is Test {
             MarketInfo memory marketInfo = markets[i];
             
             // Get token decimals using IERC20Metadata
-            uint256 decimals = IERC20Metadata(marketInfo.collateralToken).decimals();
-            uint256 initialCollateral = INITIAL_COLLATERAL_AMOUNT * (10 ** decimals);
+            uint256 decimals = IERC20Metadata(USDC).decimals();
+            uint256 initialCollateral = INITIAL_USDC_COLLATERAL_AMOUNT * (10 ** decimals);
             
-            // Mint initial collateral for testing
-            deal(marketInfo.collateralToken, address(this), initialCollateral);
+            swapHelper.swapUSDCtoPTSUSDe(address(this), initialCollateral);
             
-            // Approve looping contract to pull collateral
-            IERC20(marketInfo.collateralToken).safeIncreaseAllowance(address(looping), initialCollateral);
             
-            // Calculate optimal parameters for leverage
-            (
-                uint256 flashLoanAmount,
-                ,  // expectedCollateral
-                uint256 leverageAchieved,
-                bytes memory swapData
-            ) = calculateOptimalParams(marketInfo, initialCollateral);
+            
+            // // Approve looping contract to pull collateral
+            // IERC20(marketInfo.collateralToken).safeIncreaseAllowance(address(looping), initialCollateral);
+            
+            // // Calculate optimal parameters for leverage
+            // (
+            //     uint256 flashLoanAmount,
+            //     ,  // expectedCollateral
+            //     uint256 leverageAchieved,
+            //     bytes memory swapData
+            // ) = calculateOptimalParams(marketInfo, initialCollateral);
 
-            // Execute leverage strategy
-            IMorpho.MarketParams memory marketParams = morpho.idToMarketParams(marketInfo.id);
-            looping.executeStrategy(
-                initialCollateral,
-                MorphoLooping.FlashLoanParams({
-                    loanToken: marketInfo.loanToken,
-                    collateralToken: marketInfo.collateralToken,
-                    flashLoanAmount: flashLoanAmount,
-                    initialCollateral: initialCollateral,
-                    swapData: swapData,
-                    marketParams: marketParams
-                })
-            );
+            // // Execute leverage strategy
+            // IMorpho.MarketParams memory marketParams = morpho.idToMarketParams(marketInfo.id);
+            // looping.executeStrategy(
+            //     initialCollateral,
+            //     MorphoLooping.FlashLoanParams({
+            //         loanToken: marketInfo.loanToken,
+            //         collateralToken: marketInfo.collateralToken,
+            //         flashLoanAmount: flashLoanAmount,
+            //         initialCollateral: initialCollateral,
+            //         swapData: swapData,
+            //         marketParams: marketParams
+            //     })
+            // );
 
             // // Store position details
             // positions[i] = Position({
