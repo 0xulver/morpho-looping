@@ -221,33 +221,30 @@ contract SwapHelper is Test {
         // Approve sUSDe spending by Pendle Router
         IERC20(SUSDE).safeIncreaseAllowance(address(pendleRouter), amountIn);
 
-        // Define SY-sUSDE address
-        address SY_SUSDE = 0xE877B2A8a53763C8B0534a15e87da28f3aC1257e;
-        
-
+        // Create TokenInput struct with similar structure to successful tx
         IPendleRouter.TokenInput memory tokenInput = IPendleRouter.TokenInput({
             tokenIn: SUSDE,
             netTokenIn: amountIn,
-            tokenMintSy: address(0),
+            tokenMintSy: SUSDE,  // Using same token as tokenMintSy like in successful tx
             pendleSwap: address(0),
             swapData: IPendleRouter.SwapData({
-                swapType: 0, // Assuming 0 is default/market swap type; verify if specific type needed
+                swapType: 0,
                 extRouter: address(0),
                 extCalldata: "",
                 needScale: false
             })
         });
 
-        // Create ApproxParams struct using recommended values from docs
+        // Create ApproxParams struct using values similar to successful tx
         IPendleRouter.ApproxParams memory approxParams = IPendleRouter.ApproxParams({
-            guessMin: 0,
-            guessMax: type(uint256).max,
-            guessOffchain: 0,
-            maxIteration: 256,
-            eps: 1e14
+            guessMin: amountIn / 2,  // Conservative estimate
+            guessMax: amountIn * 2,  // Conservative estimate
+            guessOffchain: amountIn,  // Use input amount as guess
+            maxIteration: 30,         // Same as successful tx
+            eps: 10000000000000      // Same as successful tx
         });
 
-        // Create empty LimitOrderData
+        // Create empty LimitOrderData matching successful tx format
         IPendleRouter.LimitOrderData memory limitOrderData = IPendleRouter.LimitOrderData({
             limitRouter: address(0),
             epsSkipMarket: 0,
@@ -258,9 +255,9 @@ contract SwapHelper is Test {
 
         // Perform swap using Pendle Router
         try pendleRouter.swapExactTokenForPt(
-            address(this),
+            recipient,
             SUSDE_PENDLE_MARKET,
-            1,
+            1,  // minPtOut - consider setting this to a reasonable minimum based on amountIn
             approxParams,
             tokenInput,
             limitOrderData
