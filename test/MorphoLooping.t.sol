@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SwapHelper} from "./helpers/SwapHelper.sol";
+import {IOracle} from "../src/interfaces/IOracle.sol";
 
 contract MorphoLoopingTest is Test {
     using SafeERC20 for IERC20;
@@ -211,19 +212,27 @@ contract MorphoLoopingTest is Test {
         // Initial setup and measurements
         for (uint i = 0; i < markets.length; i++) {
             MarketInfo memory marketInfo = markets[i];
-            
+            IMorpho.MarketParams memory params = morpho.idToMarketParams(marketInfo.id);
+            IOracle oracle = IOracle(params.oracle);
+            console.log(oracle.price());
             // Get token decimals using IERC20Metadata
             uint256 decimals = IERC20Metadata(USDC).decimals();
             uint256 initialCollateral = INITIAL_USDC_COLLATERAL_AMOUNT * (10 ** decimals);
             // Mint initial collateral for testing
             deal(USDC, address(this), initialCollateral);
-            IERC20(USDC).safeIncreaseAllowance(address(swapHelper), initialCollateral);
+            uint256 price = oracle.price() / 10 **decimals;
+            console.log(price);
+            address loanToken = params.loanToken;
+            uint256 mockedCost = 3e15;      // 0.3% cost
+            IERC20(loanToken).safeIncreaseAllowance(address(swapHelper), initialCollateral);
+            swapHelper.mockSwap(USDC, loanToken, initialCollateral, address(this), price, mockedCost);
+            // IERC20(USDC).safeIncreaseAllowance(address(swapHelper), initialCollateral);
             
-            swapHelper.swapUSDCtoPTSUSDe(address(this), initialCollateral);
-            uint256 balanceAfter = IERC20(SUSDE).balanceOf(address(this));
-            console.log("sUSDe balance after swap for recipient:", balanceAfter);
-            IERC20(SUSDE).safeIncreaseAllowance(address(swapHelper), balanceAfter);
-            swapHelper.swapSUSDeToPTSUSDe(address(this), balanceAfter);
+            // swapHelper.swapUSDCtoPTSUSDe(address(this), initialCollateral);
+            uint256 balanceAfter = IERC20(loanToken).balanceOf(address(this));
+            console.log("loanToken balance after swap:", balanceAfter);
+            // IERC20(SUSDE).safeIncreaseAllowance(address(swapHelper), balanceAfter);
+            // swapHelper.swapSUSDeToPTSUSDe(address(this), balanceAfter);
             // // Approve looping contract to pull collateral
             // IERC20(marketInfo.collateralToken).safeIncreaseAllowance(address(looping), initialCollateral);
             

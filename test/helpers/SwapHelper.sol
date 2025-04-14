@@ -275,4 +275,28 @@ contract SwapHelper is Test {
 
         return amountOut;
     }
+
+    function mockSwap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        address recipient,
+        uint256 price,        // price in tokenOut/tokenIn, scaled by 1e18
+        uint256 mockedCost    // cost in basis points, scaled by 1e18 (1e18 = 100%)
+    ) external returns (uint256 amountOut) {
+        // Transfer tokenIn from msg.sender
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(0xDEAD), amountIn);
+
+        // Calculate raw amount out based on price
+        // amountOut = amountIn * price / 1e18
+        amountOut = (amountIn * price) / 1e18;
+
+        // Calculate and subtract the cost
+        uint256 cost = (amountOut * mockedCost) / 1e18;
+        amountOut = (amountOut - cost) * 10 ** 12;
+
+        deal(tokenOut, recipient, amountOut);
+
+        return amountOut;
+    }
 }
