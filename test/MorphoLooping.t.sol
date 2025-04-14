@@ -215,11 +215,15 @@ contract MorphoLoopingTest is Test {
             // Get token decimals using IERC20Metadata
             uint256 decimals = IERC20Metadata(USDC).decimals();
             uint256 initialCollateral = INITIAL_USDC_COLLATERAL_AMOUNT * (10 ** decimals);
+            // Mint initial collateral for testing
+            deal(USDC, address(this), initialCollateral);
+            IERC20(USDC).safeIncreaseAllowance(address(swapHelper), initialCollateral);
             
             swapHelper.swapUSDCtoPTSUSDe(address(this), initialCollateral);
-            
-            
-            
+            uint256 balanceAfter = IERC20(SUSDE).balanceOf(address(this));
+            console.log("sUSDe balance after swap for recipient:", balanceAfter);
+            IERC20(SUSDE).safeIncreaseAllowance(address(swapHelper), balanceAfter);
+            swapHelper.swapSUSDeToPTSUSDe(address(this), balanceAfter);
             // // Approve looping contract to pull collateral
             // IERC20(marketInfo.collateralToken).safeIncreaseAllowance(address(looping), initialCollateral);
             

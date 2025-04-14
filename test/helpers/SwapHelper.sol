@@ -29,12 +29,11 @@ contract SwapHelper is Test {
     address constant PT_SUSDE = 0xb7de5dFCb74d25c2f21841fbd6230355C50d9308;  // PT-sUSDe-29MAY2025
     
     // Market ID
-    bytes32 constant MARKET_PT_SUSDE = 0x8d177cc2597296e8ff4816be51fe2482add89de82bdfaba3118c7948a6b2bc02;
+    address constant SUSDE_PENDLE_MARKET = 0xB162B764044697cf03617C2EFbcB1f42e31E4766;
     
     // Router addresses
     address constant UNIV4_ROUTER = 0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af;
     address constant PENDLE_ROUTER = 0x888888888889758F76e7103c6CbF23ABbF58F946;
-
     IUniversalRouter public uniRouter;
     IPendleRouter public pendleRouter;
 
@@ -49,9 +48,8 @@ contract SwapHelper is Test {
     ) external returns (uint256 amountOut) {
         console.log("Swapping USDC to PT-sUSDe");
         console.log("Amount in:", amountIn);
-
-        // Mint initial collateral for testing
-        deal(USDC, address(this), amountIn);
+        // Transfer USDC from recipient to this contract
+        IERC20(USDC).safeTransferFrom(recipient, address(this), amountIn);
 
         IPermit2 permit2 = IPermit2(0x000000000022D473030F116dDEE9F6B43aC78BA3);
 
@@ -121,6 +119,7 @@ contract SwapHelper is Test {
         try uniRouter.execute(commands, inputs, deadline) {
             amountOut = IERC20(SUSDE).balanceOf(address(this));
             console.log("sUSDe balance after swap:", amountOut);
+            IERC20(SUSDE).transfer(recipient, amountOut);   
         } catch (bytes memory reason) {
             console.log("Swap failed with error:");
             console.logBytes(reason);
@@ -139,5 +138,144 @@ contract SwapHelper is Test {
             tokenIn,
             amountIn
         );
+    }
+
+    // function swapSUSDeToPTSUSDe(
+    //     address recipient,
+    //     uint256 amountIn
+    // ) external returns (uint256 amountOut) {
+    //     console.log("Swapping sUSDe to PT-sUSDe");
+    //     console.log("Amount in:", amountIn);
+
+    //     // Transfer sUSDe from recipient to this contract
+    //     IERC20(SUSDE).safeTransferFrom(recipient, address(this), amountIn);
+
+    //     // Approve sUSDe spending by Pendle Router
+    //     IERC20(SUSDE).safeIncreaseAllowance(address(pendleRouter), amountIn);
+
+    //     // Create TokenInput struct
+    //     IPendleRouter.TokenInput memory tokenInput = IPendleRouter.TokenInput({
+    //         tokenIn: SUSDE,
+    //         netTokenIn: amountIn,
+    //         tokenMintSy: 0xD288755556c235afFfb6316702719C32bD8706e8,
+    //         pendleSwap: address(0),  // No aggregator needed
+    //         swapData: IPendleRouter.SwapData({
+    //             extRouter: address(0),
+    //             needScale: false,
+    //             swapType: 0,
+    //             extCalldata: ""
+    //         })
+    //     });
+
+    //     // Create ApproxParams struct using recommended values from docs
+    //     IPendleRouter.ApproxParams memory approxParams = IPendleRouter.ApproxParams({
+    //         guessMin: 0,
+    //         guessMax: type(uint256).max,
+    //         guessOffchain: 0,  // Strictly 0 as per docs
+    //         maxIteration: 256,
+    //         eps: 1e14  // 0.01% unused as per docs
+    //     });
+
+    //     // Create empty LimitOrderData
+    //     IPendleRouter.LimitOrderData memory limitOrderData = IPendleRouter.LimitOrderData({
+    //         limitRouter: address(0),
+    //         epsSkipMarket: 0,
+    //         normalFills: new IPendleRouter.FillOrderParams[](0),
+    //         flashFills: new IPendleRouter.FillOrderParams[](0),
+    //         optData: ""
+    //     });
+
+    //     // Perform swap using Pendle Router
+    //     try pendleRouter.swapExactTokenForPt(
+    //         address(this),           // receiver
+    //         SUSDE_PENDLE_MARKET, // market
+    //         1,                   // minPtOut (1 = no slippage protection)
+    //         approxParams,        // approxParams
+    //         tokenInput,          // tokenInput
+    //         limitOrderData       // limitOrderData
+    //     ) returns (uint256 netPtOut, uint256 netSyFee, uint256 netSyInterm) {
+    //         amountOut = netPtOut;
+    //         console.log("PT-sUSDe received:", amountOut);
+    //     } catch (bytes memory reason) {
+    //         console.log("Swap failed with error:");
+    //         console.logBytes(reason);
+    //         console.logBytes4(bytes4(reason));
+    //         console.log("sUSDe balance:", IERC20(SUSDE).balanceOf(address(this)));
+    //         console.log("PT-sUSDe balance:", IERC20(PT_SUSDE).balanceOf(address(this)));
+    //         revert("Swap failed");
+    //     }
+
+    //     return amountOut;
+    // }
+
+    function swapSUSDeToPTSUSDe(
+        address recipient,
+        uint256 amountIn
+    ) external returns (uint256 amountOut) {
+        console.log("Swapping sUSDe to PT-sUSDe");
+        console.log("Amount in:", amountIn);
+
+        // Transfer sUSDe from recipient to this contract
+        IERC20(SUSDE).safeTransferFrom(recipient, address(this), amountIn);
+
+        // Approve sUSDe spending by Pendle Router
+        IERC20(SUSDE).safeIncreaseAllowance(address(pendleRouter), amountIn);
+
+        // Define SY-sUSDE address
+        address SY_SUSDE = 0xE877B2A8a53763C8B0534a15e87da28f3aC1257e;
+        
+
+        IPendleRouter.TokenInput memory tokenInput = IPendleRouter.TokenInput({
+            tokenIn: SUSDE,
+            netTokenIn: amountIn,
+            tokenMintSy: address(0),
+            pendleSwap: address(0),
+            swapData: IPendleRouter.SwapData({
+                swapType: 0, // Assuming 0 is default/market swap type; verify if specific type needed
+                extRouter: address(0),
+                extCalldata: "",
+                needScale: false
+            })
+        });
+
+        // Create ApproxParams struct using recommended values from docs
+        IPendleRouter.ApproxParams memory approxParams = IPendleRouter.ApproxParams({
+            guessMin: 0,
+            guessMax: type(uint256).max,
+            guessOffchain: 0,
+            maxIteration: 256,
+            eps: 1e14
+        });
+
+        // Create empty LimitOrderData
+        IPendleRouter.LimitOrderData memory limitOrderData = IPendleRouter.LimitOrderData({
+            limitRouter: address(0),
+            epsSkipMarket: 0,
+            normalFills: new IPendleRouter.FillOrderParams[](0),
+            flashFills: new IPendleRouter.FillOrderParams[](0),
+            optData: ""
+        });
+
+        // Perform swap using Pendle Router
+        try pendleRouter.swapExactTokenForPt(
+            address(this),
+            SUSDE_PENDLE_MARKET,
+            1,
+            approxParams,
+            tokenInput,
+            limitOrderData
+        ) returns (uint256 netPtOut, uint256 netSyFee, uint256 netSyInterm) {
+            amountOut = netPtOut;
+            console.log("PT-sUSDe received:", amountOut);
+        } catch (bytes memory reason) {
+            console.log("Swap failed with error:");
+            console.logBytes(reason);
+            console.logBytes4(bytes4(reason));
+            console.log("sUSDe balance:", IERC20(SUSDE).balanceOf(address(this)));
+            console.log("PT-sUSDe balance:", IERC20(PT_SUSDE).balanceOf(address(this)));
+            revert("Swap failed");
+        }
+
+        return amountOut;
     }
 }
